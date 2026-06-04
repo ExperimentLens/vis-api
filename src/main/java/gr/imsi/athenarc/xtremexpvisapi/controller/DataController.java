@@ -1,145 +1,254 @@
 package gr.imsi.athenarc.xtremexpvisapi.controller;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.protobuf.InvalidProtocolBufferException;
+import gr.imsi.athenarc.xtremexpvisapi.domain.metadata.MetadataRequest;
+import gr.imsi.athenarc.xtremexpvisapi.domain.metadata.MetadataResponseV1;
+import gr.imsi.athenarc.xtremexpvisapi.domain.queryv1.TabularRequest;
+import gr.imsi.athenarc.xtremexpvisapi.domain.queryv1.TabularResponse;
+import gr.imsi.athenarc.xtremexpvisapi.domain.queryv1.TimeSeriesRequest;
+import gr.imsi.athenarc.xtremexpvisapi.domain.queryv1.TimeSeriesResponse;
+import gr.imsi.athenarc.xtremexpvisapi.domain.queryv2.DataRequest;
+import gr.imsi.athenarc.xtremexpvisapi.domain.queryv2.params.DataSource;
+import gr.imsi.athenarc.xtremexpvisapi.service.dataService.v1.DataServiceV1;
+import gr.imsi.athenarc.xtremexpvisapi.service.dataService.v2.DataServiceV2;
+import gr.imsi.athenarc.xtremexpvisapi.service.files.FileRegistry;
+import jakarta.validation.Valid;
+import java.io.File;
+import java.sql.SQLException;
 import java.util.Map;
-
+import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.protobuf.InvalidProtocolBufferException;
-
-import gr.imsi.athenarc.xtremexpvisapi.domain.Metadata.MetadataRequest;
-import gr.imsi.athenarc.xtremexpvisapi.domain.Metadata.MetadataResponse;
-import gr.imsi.athenarc.xtremexpvisapi.domain.Query.TabularRequest;
-import gr.imsi.athenarc.xtremexpvisapi.domain.Query.TabularResponse;
-import gr.imsi.athenarc.xtremexpvisapi.domain.Query.TimeSeriesRequest;
-import gr.imsi.athenarc.xtremexpvisapi.domain.Query.TimeSeriesResponse;
-import gr.imsi.athenarc.xtremexpvisapi.domain.experiment.DataAsset;
-import gr.imsi.athenarc.xtremexpvisapi.service.DataService;
-import jakarta.validation.Valid;
 
 @RestController
 @CrossOrigin
 @RequestMapping("/api/data")
 public class DataController {
- 
-    private static final Logger LOG = LoggerFactory.getLogger(DataController.class);
-    
-    private final DataService dataService;
 
-    public DataController(DataService dataService) {
-        this.dataService = dataService;
+  private static final Logger LOG = LoggerFactory.getLogger(DataController.class);
+
+  private final DataServiceV1 dataServiceV1;
+  private final DataServiceV2 dataServiceV2;
+  private final FileRegistry fileRegistry;
+
+  public DataController(
+      DataServiceV1 dataServiceV1, DataServiceV2 dataServiceV2, FileRegistry fileRegistry) {
+    this.dataServiceV1 = dataServiceV1;
+    this.dataServiceV2 = dataServiceV2;
+    this.fileRegistry = fileRegistry;
+  }
+
+  @PostMapping("/umap")
+  public float[][] dimensionalityReduction(
+      @RequestBody float[][] data,
+      @RequestHeader(value = "Authorization", required = false) String authorization)
+      throws JsonProcessingException, InvalidProtocolBufferException {
+    LOG.info("Request for dimensionality reduction");
+    return dataServiceV2.getUmap(data);
+  }
+
+  @PostMapping("/timeseries")
+  public TimeSeriesResponse getTimeSeriesData(
+      @Valid @RequestBody TimeSeriesRequest timeSeriesRequest) {
+    LOG.info("Request for time series data {}", timeSeriesRequest);
+    return dataServiceV1.getTimeSeriesData(timeSeriesRequest);
+  }
+
+  @PostMapping("/tabular")
+  public TabularResponse tabulardata(@Valid @RequestBody TabularRequest tabularRequest) {
+    LOG.info("Request for tabular data {}", tabularRequest);
+    return dataServiceV1.getTabularData(tabularRequest);
+  }
+
+  @PostMapping("/metadata")
+  public MetadataResponseV1 getFileMetadata(@RequestBody MetadataRequest metadataRequest) {
+    LOG.info("Getting metadata for file {}", metadataRequest.getDatasetId());
+    return dataServiceV1.getFileMetadata(metadataRequest);
+  }
+
+  @PostMapping("/fetch")
+  public CompletableFuture<ResponseEntity<Object>> fetchData(
+      @Valid @RequestBody DataRequest dataRequest,
+      @RequestHeader(value = "Authorization", required = false) String authorization)
+      throws SQLException, Exception {
+    LOG.info("Received request for data: {}", dataRequest);
+
+    return dataServiceV2
+        .executeDataRequest(dataRequest, authorization)
+        .thenApply(
+            response -> {
+              LOG.info(
+                  "DuckDB query executed successfully. Returned {} rows", response.getQuerySize());
+              return ResponseEntity.ok((Object) response);
+            })
+        .exceptionally(
+            throwable -> {
+              if (throwable.getCause() instanceof SQLException) {
+                SQLException e = (SQLException) throwable.getCause();
+                LOG.error("SQL error executing DuckDB query", e);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(
+                        Map.of(
+                            "error",
+                            "SQL Error",
+                            "message",
+                            e.getMessage(),
+                            "sqlState",
+                            e.getSQLState() != null ? e.getSQLState() : "Unknown"));
+              } else {
+                LOG.error("Error executing DuckDB tabular query", throwable);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(
+                        Map.of(
+                            "error", "Internal Server Error", "message", throwable.getMessage()));
+              }
+            });
+  }
+
+  @PostMapping("/meta")
+  public CompletableFuture<ResponseEntity<Object>> getFileMeta(
+      @RequestBody DataSource dataSource,
+      @RequestHeader(value = "Authorization", required = false) String authorization)
+      throws SQLException, Exception {
+    LOG.info("Getting metadata for file {}", dataSource.getSource());
+
+    // Check if this is an image file NEW NEW
+    if (isImageFile(dataSource)) {
+      LOG.info("Detected image file, processing with download for: {}", dataSource.getSource());
+      return dataServiceV2
+          .getImageMetadata(dataSource, authorization)
+          .thenApply(response -> ResponseEntity.ok((Object) response))
+          .exceptionally(
+              throwable -> {
+                LOG.error("Error getting image metadata", throwable);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body((Object) ("Error getting image metadata: " + throwable.getMessage()));
+              });
     }
-    
-    @PostMapping("/umap")
-    public float[][] dimensionalityReduction(@RequestBody float[][] data) throws JsonProcessingException, InvalidProtocolBufferException {
-        LOG.info("Request for dimensionality reduction");
-        return dataService.getUmap(data);
+
+    // Check if this is a text file (mirrors the image branch above)
+    if (isTextFile(dataSource)) {
+      LOG.info("Detected text file, processing with download for: {}", dataSource.getSource());
+      return dataServiceV2
+          .getTextMetadata(dataSource, authorization)
+          .thenApply(response -> ResponseEntity.ok((Object) response))
+          .exceptionally(
+              throwable -> {
+                LOG.error("Error getting text metadata", throwable);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body((Object) ("Error getting text metadata: " + throwable.getMessage()));
+              });
     }
 
-    @PostMapping("/timeseries")
-    public TimeSeriesResponse getTimeSeriesData(@Valid @RequestBody TimeSeriesRequest timeSeriesRequest) {
-        LOG.info("Request for time series data {}", timeSeriesRequest);    
-        return dataService.getTimeSeriesData(timeSeriesRequest);
-    }
-   
-    @PostMapping("/tabular")
-    public TabularResponse tabulardata(@Valid @RequestBody TabularRequest tabularRequest) {
-        LOG.info("Request for tabular data {}", tabularRequest);
-        return dataService.getTabularData(tabularRequest);
-    }
+    // For non-image/non-text files, use the existing metadata service TILL HERE TILL HERE
+    return dataServiceV2
+        .getFileMetadata(dataSource, authorization)
+        .thenApply(response -> ResponseEntity.ok((Object) response))
+        .exceptionally(
+            throwable -> {
+              LOG.error("Error getting file metadata", throwable);
+              return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                  .body((Object) ("Error getting file metadata: " + throwable.getMessage()));
+            });
+  }
 
-    @PostMapping("/metadata")
-    public MetadataResponse getFileMetadata(@RequestBody MetadataRequest metadataRequest) {
-        LOG.info("Getting metadata for file {}", metadataRequest.getDatasetId());
-        return dataService.getFileMetadata(metadataRequest);
-    }
-
-   @GetMapping("/catalog-assets")
-public ResponseEntity<List<DataAsset>> fetchRemoteAssets(
-        @RequestParam(defaultValue = "1") int page,
-        @RequestParam(defaultValue = "10") int perPage,
-        @RequestParam(defaultValue = "created,desc") String sort,
-        @RequestParam(required = false) String project_id,
-        @RequestParam(required = false) String run_id
-
-) {
-    LOG.info("Fetching remote data assets from external catalog");
-
-    // Build the URL with query parameters
-    UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl("http://146.124.106.200/api/catalog/my-catalog")
-            .queryParam("page", page)
-            .queryParam("perPage", perPage)
-            .queryParam("sort", sort);
-
-    if (project_id != null) {
-        uriBuilder.queryParam("project_id", project_id);
+  /**
+   * Serves a file by an opaque, server-issued ID (obtained from the {@code fileId} / {@code
+   * fileUrl} fields of an image/text metadata response). The ID is resolved against {@link
+   * FileRegistry}, so only files the server has registered can be served — there is no way to
+   * request an arbitrary filesystem path.
+   */
+  @GetMapping("/file/{id}")
+  public ResponseEntity<Resource> getFileById(@PathVariable String id) {
+    String path = fileRegistry.resolve(id);
+    if (path == null) {
+      return ResponseEntity.notFound().build();
     }
 
-    if (run_id != null) {
-        uriBuilder.queryParam("run_id", run_id);
+    File file = new File(path);
+    FileSystemResource resource = new FileSystemResource(file);
+
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=" + file.getName())
+        .contentType(MediaType.parseMediaType(getContentType(file.getName())))
+        .body(resource);
+  }
+
+  /**
+   * @deprecated Serves a file by raw filesystem path. This accepts any absolute path the caller
+   *     supplies (path-traversal / arbitrary-file-read risk). Prefer the ID-based {@link
+   *     #getFileById(String)} endpoint and remove this once all clients have migrated.
+   */
+  @Deprecated
+  @GetMapping("/file")
+  public ResponseEntity<Resource> getFile(@RequestParam String path) {
+    File file = new File(path);
+
+    if (!file.exists()) {
+      return ResponseEntity.notFound().build();
     }
 
-    String remoteUrl = uriBuilder.toUriString();
-    LOG.info("Remote URL: {}", remoteUrl);
+    FileSystemResource resource = new FileSystemResource(file);
 
-    // Make the HTTP GET request
-    RestTemplate restTemplate = new RestTemplate();
-    ResponseEntity<String> response = restTemplate.getForEntity(remoteUrl, String.class);
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=" + file.getName())
+        .contentType(MediaType.parseMediaType(getContentType(file.getName())))
+        .body(resource);
+  }
 
-    if (!response.getStatusCode().is2xxSuccessful()) {
-        LOG.error("Failed to fetch remote assets: HTTP {}", response.getStatusCode());
-        return ResponseEntity.status(response.getStatusCode()).build();
+  private String getContentType(String filename) {
+    if (filename.endsWith(".png")) return "image/png";
+    if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) return "image/jpeg";
+    if (filename.endsWith(".gif")) return "image/gif";
+    if (filename.endsWith(".md") || filename.endsWith(".markdown")) return "text/markdown";
+    if (filename.endsWith(".txt") || filename.endsWith(".log")) return "text/plain";
+
+    return "application/octet-stream";
+  }
+
+  private boolean isImageFile(DataSource dataSource) {
+    return hasImageExtension(dataSource.getSource())
+        || hasImageExtension(dataSource.getFileName())
+        || hasImageExtension(dataSource.getFormat());
+  }
+
+  private boolean hasImageExtension(String value) {
+    if (value == null || value.isBlank()) {
+      return false;
     }
 
-    try {
-        ObjectMapper mapper = new ObjectMapper();
-        JsonNode root = mapper.readTree(response.getBody());
-        JsonNode dataArray = root.path("data");
+    String lowerValue = value.toLowerCase();
+    return lowerValue.matches(".*\\.(png|jpg|jpeg|gif|webp|bmp|tiff?|svg)($|\\?.*)");
+  }
 
-        List<DataAsset> dataAssets = new ArrayList<>();
-        for (JsonNode fileNode : dataArray) {
-            DataAsset asset = new DataAsset();
-            asset.setName(fileNode.path("upload_filename").asText(""));
-            asset.setSourceType("http");
-            asset.setSource("http://146.124.106.200/" + fileNode.path("path").asText());
-            asset.setFormat(fileNode.path("file_type").asText(""));
-            asset.setRole(DataAsset.Role.INPUT);
-            asset.setTask(fileNode.path("description").asText(""));
+  private boolean isTextFile(DataSource dataSource) {
+    return hasTextExtension(dataSource.getSource())
+        || hasTextExtension(dataSource.getFileName())
+        || hasTextExtension(dataSource.getFormat());
+  }
 
-            Map<String, String> tags = new HashMap<>();
-            tags.put("created", fileNode.path("created").asText(""));
-            tags.put("projectId", fileNode.path("project_id").asText(""));
-            tags.put("id", fileNode.path("id").asText(""));
-            tags.put("file_size", fileNode.path("file_size").asText(""));
-            asset.setTags(tags);
-
-            dataAssets.add(asset);
-        }
-
-        LOG.info("Fetched {} data assets", dataAssets.size());
-        return ResponseEntity.ok(dataAssets);
-
-    } catch (Exception e) {
-        LOG.error("Error processing data assets", e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+  private boolean hasTextExtension(String value) {
+    if (value == null || value.isBlank()) {
+      return false;
     }
-}
 
+    String lowerValue = value.toLowerCase();
+    return lowerValue.matches(".*\\.(txt|log|md|markdown)($|\\?.*)");
+  }
 }

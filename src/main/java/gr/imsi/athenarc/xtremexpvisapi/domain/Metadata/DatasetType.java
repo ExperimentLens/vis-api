@@ -1,6 +1,6 @@
-package gr.imsi.athenarc.xtremexpvisapi.domain.Metadata;
+package gr.imsi.athenarc.xtremexpvisapi.domain.metadata;
 
 public enum DatasetType {
-    timeseries,
-    tabular
+  timeseries,
+  tabular
 }

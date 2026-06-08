@@ -33,7 +33,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -182,28 +181,6 @@ public class DataController {
     }
 
     File file = new File(path);
-    FileSystemResource resource = new FileSystemResource(file);
-
-    return ResponseEntity.ok()
-        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=" + file.getName())
-        .contentType(MediaType.parseMediaType(getContentType(file.getName())))
-        .body(resource);
-  }
-
-  /**
-   * @deprecated Serves a file by raw filesystem path. This accepts any absolute path the caller
-   *     supplies (path-traversal / arbitrary-file-read risk). Prefer the ID-based {@link
-   *     #getFileById(String)} endpoint and remove this once all clients have migrated.
-   */
-  @Deprecated
-  @GetMapping("/file")
-  public ResponseEntity<Resource> getFile(@RequestParam String path) {
-    File file = new File(path);
-
-    if (!file.exists()) {
-      return ResponseEntity.notFound().build();
-    }
-
     FileSystemResource resource = new FileSystemResource(file);
 
     return ResponseEntity.ok()

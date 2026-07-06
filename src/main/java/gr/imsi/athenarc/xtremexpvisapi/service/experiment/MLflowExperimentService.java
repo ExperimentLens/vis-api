@@ -65,67 +65,78 @@ public class MLflowExperimentService implements ExperimentService {
   }
 
   @Override
-  public ResponseEntity<List<Experiment>> getExperiments(
+    public ResponseEntity<List<Experiment>> getExperiments(
       int limit, int offset, String authorization) {
     String requestUrl = mlflowTrackingUrl + "/api/2.0/mlflow/experiments/search";
     List<Experiment> targetExperiments = new ArrayList<>();
-    String pageToken = "";
+ 
+    String pageToken = null;
     int skipped = 0;
     int collected = 0;
-
+ 
+    int safeLimit = limit > 0 ? limit : 50;
+    int safeOffset = Math.max(0, offset);
+ 
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(MediaType.APPLICATION_JSON);
-
-    while (collected < limit) {
-      Map<String, Object> requestBody = new HashMap<>();
-      requestBody.put("max_results", Math.min(1000, limit - collected));
-      requestBody.put("page_token", pageToken);
-
-      List<String> orderBy = new ArrayList<>();
-      orderBy.add("creation_time DESC");
-      requestBody.put("order_by", orderBy);
-
-      HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-
+    headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+ 
+    ObjectMapper objectMapper = new ObjectMapper();
+ 
+    while (collected < safeLimit) {
       try {
+        Map<String, Object> requestBody = new HashMap<>();
+ 
+        // Use Long because MLflow docs define this as INT64.
+        requestBody.put("max_results", (long) Math.min(1000, safeLimit - collected));
+ 
+        if (pageToken != null && !pageToken.isBlank()) {
+          requestBody.put("page_token", pageToken);
+        }
+ 
+        String jsonBody = objectMapper.writeValueAsString(requestBody);
+ 
+        HttpEntity<String> entity = new HttpEntity<>(jsonBody, headers);
+ 
         ResponseEntity<Map> response =
             restTemplate.exchange(requestUrl, HttpMethod.POST, entity, Map.class);
-
+ 
         if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
           return ResponseEntity.status(response.getStatusCode()).build();
         }
-
+ 
         Map<String, Object> responseBody = response.getBody();
         List<Experiment> pageExperiments = mapToExperiments(responseBody);
-
+ 
         if (pageExperiments == null || pageExperiments.isEmpty()) {
           break;
         }
-
-        // Handle offset and collect only needed experiments
+ 
         for (Experiment exp : pageExperiments) {
-          if (skipped < offset) {
+          if (skipped < safeOffset) {
             skipped++;
             continue;
           }
+ 
           targetExperiments.add(exp);
           collected++;
-          if (collected == limit) break;
+ 
+          if (collected >= safeLimit) {
+            break;
+          }
         }
-
-        if (collected == limit) break;
-
+ 
         pageToken = (String) responseBody.get("next_page_token");
-        if (pageToken == null || pageToken.isEmpty()) {
+        if (pageToken == null || pageToken.isBlank()) {
           break;
         }
-
+ 
       } catch (Exception e) {
         LOG.error("An error was encountered while fetching and/or parsing experiments list.", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
       }
     }
-
+ 
     return ResponseEntity.ok(targetExperiments);
   }
 
@@ -158,53 +169,61 @@ public class MLflowExperimentService implements ExperimentService {
   }
 
   @Override
-  public ResponseEntity<List<Run>> getRunsForExperiment(String experimentId) {
+ public ResponseEntity<List<Run>> getRunsForExperiment(String experimentId) {
     String requestUrl = mlflowTrackingUrl + "/api/2.0/mlflow/runs/search";
     List<Run> allRuns = new ArrayList<>();
-    String pageToken = "";
-
+    String pageToken = null;
+ 
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(MediaType.APPLICATION_JSON);
-
+    headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+ 
+    ObjectMapper objectMapper = new ObjectMapper();
+ 
     while (true) {
-      Map<String, Object> requestBody = new HashMap<>();
-      requestBody.put("experiment_ids", List.of(experimentId));
-      requestBody.put("max_results", 1000); // MLflow maximum page size
-      requestBody.put("page_token", pageToken);
-      requestBody.put("order_by", List.of("start_time DESC"));
-
-      HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-
       try {
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("experiment_ids", List.of(experimentId));
+        requestBody.put("max_results", 1000L);
+        requestBody.put("run_view_type", "ALL");
+        requestBody.put("order_by", List.of("start_time DESC"));
+ 
+        if (pageToken != null && !pageToken.isBlank()) {
+          requestBody.put("page_token", pageToken);
+        }
+ 
+        String jsonBody = objectMapper.writeValueAsString(requestBody);
+ 
+        HttpEntity<String> entity = new HttpEntity<>(jsonBody, headers);
+ 
         ResponseEntity<Map> response =
             restTemplate.exchange(requestUrl, HttpMethod.POST, entity, Map.class);
-
+ 
         if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
           return ResponseEntity.status(response.getStatusCode()).build();
         }
-
+ 
         Map<String, Object> responseBody = response.getBody();
         List<Run> pageRuns = mapToRuns(responseBody);
-
+ 
         if (pageRuns != null && !pageRuns.isEmpty()) {
           allRuns.addAll(pageRuns);
         }
-
+ 
         pageToken = (String) responseBody.get("next_page_token");
-        if (pageToken == null || pageToken.isEmpty()) {
-          break; // No more pages to fetch
+        if (pageToken == null || pageToken.isBlank()) {
+          break;
         }
-
+ 
       } catch (Exception e) {
         LOG.error("Error fetching runs for experiment {}", experimentId, e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
       }
     }
-
+ 
     return ResponseEntity.ok(allRuns);
   }
-
-  @Override
+    @Override
   public ResponseEntity<Run> getRunById(String experimentId, String runId) {
     String requestUrl = mlflowTrackingUrl + "/api/2.0/mlflow/runs/get?run_id=" + runId;
 

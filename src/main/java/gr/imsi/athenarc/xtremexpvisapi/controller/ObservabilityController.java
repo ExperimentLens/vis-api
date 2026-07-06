@@ -1,7 +1,10 @@
 package gr.imsi.athenarc.xtremexpvisapi.controller;
 
+import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ReplayRequest;
+import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ReplayResult;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.TraceDetail;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.TracesResponse;
+import gr.imsi.athenarc.xtremexpvisapi.service.observability.CounterfactualReplayService;
 import gr.imsi.athenarc.xtremexpvisapi.service.observability.ObservabilityService;
 import gr.imsi.athenarc.xtremexpvisapi.service.observability.ObservabilityServiceFactory;
 import io.swagger.v3.oas.annotations.Operation;
@@ -11,6 +14,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -20,9 +25,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class ObservabilityController {
 
   private final ObservabilityService observabilityService;
+  private final CounterfactualReplayService counterfactualReplayService;
 
-  public ObservabilityController(ObservabilityServiceFactory observabilityServiceFactory) {
+  public ObservabilityController(
+      ObservabilityServiceFactory observabilityServiceFactory,
+      CounterfactualReplayService counterfactualReplayService) {
     this.observabilityService = observabilityServiceFactory.getObservabilityService();
+    this.counterfactualReplayService = counterfactualReplayService;
   }
 
   @GetMapping("/traces")
@@ -57,5 +66,27 @@ public class ObservabilityController {
           String traceId) {
     TraceDetail trace = observabilityService.getTrace(traceId);
     return ResponseEntity.ok(trace);
+  }
+
+  @PostMapping("/traces/{traceId}/counterfactual")
+  @Operation(
+      summary = "Run a counterfactual replay of one LLM observation in a trace",
+      description =
+          "Re-runs a single GENERATION observation's prompt (merged with the supplied overrides) "
+              + "against the local Ollama model, so the original and counterfactual outputs can be "
+              + "compared. This replays reasoning only; it does not re-execute training/evaluation.")
+  @ApiResponses(
+      value = {
+        @ApiResponse(responseCode = "200", description = "Successfully ran the counterfactual replay"),
+        @ApiResponse(responseCode = "400", description = "Invalid request or non-replayable observation"),
+        @ApiResponse(responseCode = "404", description = "Trace or observation not found"),
+        @ApiResponse(responseCode = "500", description = "Internal server error")
+      })
+  public ResponseEntity<ReplayResult> runCounterfactual(
+      @Parameter(description = "The ID of the trace", required = true) @PathVariable
+          String traceId,
+      @RequestBody ReplayRequest request) {
+    ReplayResult result = counterfactualReplayService.runCounterfactual(traceId, request);
+    return ResponseEntity.ok(result);
   }
 }

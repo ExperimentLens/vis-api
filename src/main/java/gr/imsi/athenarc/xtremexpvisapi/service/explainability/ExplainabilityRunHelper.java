@@ -369,6 +369,87 @@ public class ExplainabilityRunHelper {
   }
 
   /**
+   * Builds an {@link ExplanationsRequest} for hyperparameter explainability on runs that have no
+   * ML artifacts (no model file, no X_test/Y_test/... data assets) — e.g. LLM runs, where the
+   * only signal available is the run's params (hyperparameters) and metrics.
+   *
+   * <p>Unlike {@link #requestBuilder}, this never touches {@link MlAnalysisResourceHelper} /
+   * {@link gr.imsi.athenarc.xtremexpvisapi.service.files.FileService}: the surrogate model is
+   * trained purely on (hyperparameters -> metric) pairs collected from the run and its "similar"
+   * runs, so no data download is required. The map key used for {@code putHyperConfigs} is just
+   * the run id — the Python side (hyperparameterExplanation branch of PDP/ALE handlers) only
+   * reads the map values, never the keys.
+   */
+  public ExplanationsRequest llmHyperparameterRequestBuilder(
+      String explainabilityRequest, String experimentId, String runId, String authorization)
+      throws JsonProcessingException, InvalidProtocolBufferException {
+
+    String[] result = extractAndCleanTargetMetric(explainabilityRequest);
+    String targetMetricName = result[0];
+    String cleanedRequest = result[1];
+
+    ExplanationsRequest.Builder requestBuilder = ExplanationsRequest.newBuilder();
+    JsonFormat.parser().merge(cleanedRequest, requestBuilder);
+
+    if (requestBuilder.getExplanationType().isEmpty()) {
+      requestBuilder.setExplanationType("llmHyperparameterExplanation");
+    }
+
+    ExperimentService service = experimentServiceFactory.getActiveService();
+    ResponseEntity<Run> response = service.getRunById(experimentId, runId);
+    Run run = response.getBody();
+    if (run == null) {
+      throw new IllegalArgumentException(
+          "Run not found for experimentId: " + experimentId + ", runId: " + runId);
+    }
+
+    List<Run> similarRuns = findSimilarRuns(run);
+    similarRuns.add(run);
+    if (similarRuns.size() < 2) {
+      throw new IllegalArgumentException(
+          "Not enough runs with matching hyperparameter keys to train a surrogate model for run: "
+              + runId);
+    }
+
+    if (requestBuilder.getExplanationMethod().equals("ale")
+        && requestBuilder.getFeature1().isEmpty()) {
+      requestBuilder.setFeature1(
+          findFirstDifferingParameter(similarRuns)
+              .orElseThrow(() -> new IllegalArgumentException("No differing parameters found")));
+    }
+
+    for (Run similarRun : similarRuns) {
+      List<Param> params = similarRun.getParams();
+      if (params == null || params.isEmpty()) {
+        LOG.warn("No hyperparameters found for run: " + similarRun.getId() + ", skipping.");
+        continue;
+      }
+
+      Hyperparameters.Builder hyperparametersBuilder = Hyperparameters.newBuilder();
+      double metricValue = getMetricValue(similarRun, targetMetricName);
+      hyperparametersBuilder.setMetricValue((float) metricValue);
+
+      for (Param param : params) {
+        HyperparameterList.Builder hyperparameterListBuilder = HyperparameterList.newBuilder();
+        hyperparameterListBuilder.setValues(param.getValue());
+        try {
+          Double.parseDouble(param.getValue());
+          hyperparameterListBuilder.setType("numeric");
+        } catch (NumberFormatException e) {
+          hyperparameterListBuilder.setType("categorical");
+        }
+        hyperparametersBuilder.putHyperparameter(
+            param.getName(), hyperparameterListBuilder.build());
+      }
+
+      requestBuilder.putHyperConfigs(similarRun.getId(), hyperparametersBuilder.build());
+    }
+
+    LOG.info("LLM hyperparameter explanation - similar runs used: " + similarRuns.size());
+    return requestBuilder.build();
+  }
+
+  /**
    * Finds the first parameter whose value differs across the given runs.
    *
    * @param runs the list of runs to check for differences in parameter values

@@ -1,6 +1,6 @@
-# XtremeXP Visualization API
+# Experiment Lens Visualization API
 
-Welcome to the XtremeXP Visualization API! This API is designed to provide visual analytics and explainability features for your machine learning models. Leveraging RESTful endpoints and utilizing the GRPC Explainability API developed by ARC, this tool aims to enhance the interpretability of your models while making it easy to integrate into your existing infrastructure.
+Welcome to the Experiment Lens Visualization API! This API is designed to provide visual analytics and explainability features for your machine learning models. Leveraging RESTful endpoints and utilizing the GRPC Explainability API developed by ARC, this tool aims to enhance the interpretability of your models while making it easy to integrate into your existing infrastructure.
 
 ## Features
 
@@ -14,7 +14,7 @@ Welcome to the XtremeXP Visualization API! This API is designed to provide visua
 1. Clone this repository:
 
     ```
-   https://colab-repo.intracom-telecom.com/colab-projects/extremexp/user-interaction/visualization/vis-api.git
+   https://github.com/ExperimentLens/vis-api.git
     ```
 
 2. Navigate into the project directory:

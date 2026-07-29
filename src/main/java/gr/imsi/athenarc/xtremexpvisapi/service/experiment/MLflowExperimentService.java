@@ -25,8 +25,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
@@ -34,6 +37,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 /**
@@ -53,83 +57,324 @@ public class MLflowExperimentService implements ExperimentService {
   private String mlflowWorkingDirectory;
 
   private final RestTemplate restTemplate;
-
+  private final ObjectMapper objectMapper;
   private final ExecutionEngineFactory executionEngineFactory;
 
   private static final Logger LOG = LoggerFactory.getLogger(MLflowExperimentService.class);
 
   public MLflowExperimentService(
-      RestTemplate restTemplate, ExecutionEngineFactory executionEngineFactory) {
+      RestTemplate restTemplate, ObjectMapper objectMapper, ExecutionEngineFactory executionEngineFactory) {
     this.restTemplate = restTemplate;
+    this.objectMapper = objectMapper;
     this.executionEngineFactory = executionEngineFactory;
   }
 
-  @Override
   public ResponseEntity<List<Experiment>> getExperiments(
-      int limit, int offset, String authorization) {
-    String requestUrl = mlflowTrackingUrl + "/api/2.0/mlflow/experiments/search";
+      int limit,
+      int offset,
+      String authorization) {
+      
+    if (limit <= 0) {
+      LOG.warn("Invalid experiments limit: {}", limit);
+      return ResponseEntity.badRequest().build();
+    }
+  
+    if (offset < 0) {
+      LOG.warn("Invalid experiments offset: {}", offset);
+      return ResponseEntity.badRequest().build();
+    }
+  
+    String requestUrl =
+        mlflowTrackingUrl + "/api/2.0/mlflow/experiments/search";
+  
     List<Experiment> targetExperiments = new ArrayList<>();
-    String pageToken = "";
-    int skipped = 0;
-    int collected = 0;
-
+  
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(MediaType.APPLICATION_JSON);
-
-    while (collected < limit) {
+    headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+  
+    if (authorization != null && !authorization.isBlank()) {
+      headers.set(HttpHeaders.AUTHORIZATION, authorization);
+    }
+  
+    String pageToken = null;
+  
+    int skipped = 0;
+    int collected = 0;
+    int pageNumber = 0;
+  
+    /*
+     * Protect against repeated or cyclic tokens:
+     *
+     * page 1 -> token A
+     * page 2 -> token B
+     * page 3 -> token A
+     */
+    Set<String> seenPageTokens = new HashSet<>();
+  
+    /*
+     * Additional protection against an unexpected server-side pagination loop.
+     */
+    final int maxPages = 1000;
+  
+    while (collected < limit && pageNumber < maxPages) {
+      pageNumber++;
+    
+      int progressBeforeRequest = skipped + collected;
+    
+      int remainingResults = limit - collected;
+      int remainingOffset = Math.max(0, offset - skipped);
+    
+      /*
+       * Request enough records to cover the remaining offset and requested
+       * results, while respecting MLflow's maximum page size.
+       */
+      int pageSize = Math.min(
+          1000,
+          remainingOffset + remainingResults
+      );
+    
+      if (pageSize <= 0) {
+        LOG.error(
+            "Stopping MLflow pagination because the calculated page size "
+                + "is invalid. limit={}, offset={}, skipped={}, collected={}",
+            limit,
+            offset,
+            skipped,
+            collected
+        );
+        break;
+      }
+    
       Map<String, Object> requestBody = new HashMap<>();
-      requestBody.put("max_results", Math.min(1000, limit - collected));
-      requestBody.put("page_token", pageToken);
-
-      List<String> orderBy = new ArrayList<>();
-      orderBy.add("creation_time DESC");
-      requestBody.put("order_by", orderBy);
-
-      HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-
+      requestBody.put("max_results", pageSize);
+    
+      /*
+       * Do not send an empty page token on the first request.
+       */
+      if (pageToken != null && !pageToken.isBlank()) {
+        requestBody.put("page_token", pageToken);
+      }
+    
       try {
+        /*
+         * Serialize after adding the page token.
+         * Otherwise, every request could contain only the first-page body.
+         */
+        String requestJson =
+            objectMapper.writeValueAsString(requestBody);
+      
+        HttpEntity<String> entity =
+            new HttpEntity<>(requestJson, headers);
+      
+        LOG.info(
+            "Calling MLflow experiments search: "
+                + "page={}, url={}, limit={}, offset={}, skipped={}, "
+                + "collected={}, pageToken={}, requestJson={}",
+            pageNumber,
+            requestUrl,
+            limit,
+            offset,
+            skipped,
+            collected,
+            pageToken,
+            requestJson
+        );
+      
         ResponseEntity<Map> response =
-            restTemplate.exchange(requestUrl, HttpMethod.POST, entity, Map.class);
-
-        if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
-          return ResponseEntity.status(response.getStatusCode()).build();
+            restTemplate.exchange(
+                requestUrl,
+                HttpMethod.POST,
+                entity,
+                Map.class
+            );
+          
+        if (!response.getStatusCode().is2xxSuccessful()
+            || response.getBody() == null) {
+            
+          LOG.error(
+              "MLflow returned an unsuccessful response: {}",
+              response.getStatusCode()
+          );
+        
+          return ResponseEntity
+              .status(response.getStatusCode())
+              .build();
         }
-
+      
         Map<String, Object> responseBody = response.getBody();
-        List<Experiment> pageExperiments = mapToExperiments(responseBody);
-
+      
+        List<Experiment> pageExperiments =
+            mapToExperiments(responseBody);
+      
         if (pageExperiments == null || pageExperiments.isEmpty()) {
+          LOG.info(
+              "Stopping MLflow pagination because page {} "
+                  + "returned no experiments.",
+              pageNumber
+          );
           break;
         }
-
-        // Handle offset and collect only needed experiments
-        for (Experiment exp : pageExperiments) {
+      
+        for (Experiment experiment : pageExperiments) {
+          /*
+           * Skip experiments until the requested offset is reached.
+           */
           if (skipped < offset) {
             skipped++;
             continue;
           }
-          targetExperiments.add(exp);
+        
+          targetExperiments.add(experiment);
           collected++;
-          if (collected == limit) break;
+        
+          if (collected >= limit) {
+            break;
+          }
         }
-
-        if (collected == limit) break;
-
-        pageToken = (String) responseBody.get("next_page_token");
-        if (pageToken == null || pageToken.isEmpty()) {
+      
+        LOG.info(
+            "Processed MLflow page {}: received={}, skipped={}, collected={}",
+            pageNumber,
+            pageExperiments.size(),
+            skipped,
+            collected
+        );
+      
+        if (collected >= limit) {
           break;
         }
-
+      
+        Object nextPageTokenValue =
+            responseBody.get("next_page_token");
+      
+        String nextPageToken =
+            nextPageTokenValue instanceof String
+                ? (String) nextPageTokenValue
+                : null;
+      
+        LOG.info(
+            "MLflow page {} returned nextPageToken={}",
+            pageNumber,
+            nextPageToken
+        );
+      
+        /*
+         * No token means there are no additional pages.
+         */
+        if (nextPageToken == null || nextPageToken.isBlank()) {
+          LOG.info(
+              "Stopping MLflow pagination because no next page token "
+                  + "was returned."
+          );
+          break;
+        }
+      
+        /*
+         * Prevent:
+         *
+         * token A -> token A
+         */
+        if (nextPageToken.equals(pageToken)) {
+          LOG.error(
+              "Stopping MLflow pagination because the same page token "
+                  + "was returned twice: {}",
+              nextPageToken
+          );
+          break;
+        }
+      
+        /*
+         * Prevent:
+         *
+         * token A -> token B -> token A
+         */
+        if (!seenPageTokens.add(nextPageToken)) {
+          LOG.error(
+              "Stopping MLflow pagination because an already-used "
+                  + "page token was returned: {}",
+              nextPageToken
+          );
+          break;
+        }
+      
+        int progressAfterRequest = skipped + collected;
+      
+        /*
+         * Stop if a page was processed without skipping or collecting
+         * any experiments.
+         */
+        if (progressAfterRequest == progressBeforeRequest) {
+          LOG.error(
+              "Stopping MLflow pagination because no progress was made. "
+                  + "page={}, skipped={}, collected={}",
+              pageNumber,
+              skipped,
+              collected
+          );
+          break;
+        }
+      
+        pageToken = nextPageToken;
+      
+      } catch (HttpClientErrorException e) {
+        LOG.error(
+            "MLflow rejected experiments request. "
+                + "Status={}, response={}, request={}",
+            e.getStatusCode(),
+            e.getResponseBodyAsString(),
+            requestBody,
+            e
+        );
+      
+        return ResponseEntity
+            .status(e.getStatusCode())
+            .build();
+      
+      } catch (JsonProcessingException e) {
+        LOG.error(
+            "Could not serialize MLflow experiments request: {}",
+            requestBody,
+            e
+        );
+      
+        return ResponseEntity
+            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .build();
+      
       } catch (Exception e) {
-        LOG.error("An error was encountered while fetching and/or parsing experiments list.", e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        LOG.error(
+            "An error occurred while fetching or parsing "
+                + "the MLflow experiments list.",
+            e
+        );
+      
+        return ResponseEntity
+            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .build();
       }
     }
-
+  
+    if (pageNumber >= maxPages && collected < limit) {
+      LOG.error(
+          "MLflow pagination reached the safety limit of {} pages. "
+              + "Returning {} collected experiments.",
+          maxPages,
+          collected
+      );
+    }
+  
+    LOG.info(
+        "Returning {} MLflow experiments for limit={} and offset={}.",
+        targetExperiments.size(),
+        limit,
+        offset
+    );
+  
     return ResponseEntity.ok(targetExperiments);
   }
 
-  @Override
+@Override
   public ResponseEntity<Experiment> getExperimentById(String experimentId) {
     String requestUrl =
         mlflowTrackingUrl + "/api/2.0/mlflow/experiments/get?experiment_id=" + experimentId;
@@ -159,47 +404,280 @@ public class MLflowExperimentService implements ExperimentService {
 
   @Override
   public ResponseEntity<List<Run>> getRunsForExperiment(String experimentId) {
-    String requestUrl = mlflowTrackingUrl + "/api/2.0/mlflow/runs/search";
+    if (experimentId == null || experimentId.isBlank()) {
+      LOG.warn("Cannot search MLflow runs because experimentId is empty.");
+      return ResponseEntity.badRequest().build();
+    }
+
+    String requestUrl =
+        mlflowTrackingUrl + "/api/2.0/mlflow/runs/search";
+
     List<Run> allRuns = new ArrayList<>();
-    String pageToken = "";
 
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(MediaType.APPLICATION_JSON);
+    headers.setAccept(List.of(MediaType.APPLICATION_JSON));
 
-    while (true) {
-      Map<String, Object> requestBody = new HashMap<>();
-      requestBody.put("experiment_ids", List.of(experimentId));
-      requestBody.put("max_results", 1000); // MLflow maximum page size
-      requestBody.put("page_token", pageToken);
-      requestBody.put("order_by", List.of("start_time DESC"));
+    String pageToken = null;
+    int pageNumber = 0;
 
-      HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
+    Set<String> seenPageTokens = new HashSet<>();
+
+    // Safety guard against an unexpected pagination loop.
+    final int maxPages = 1000;
+
+    while (pageNumber < maxPages) {
+      pageNumber++;
+
+      Map<String, Object> requestBody = new LinkedHashMap<>();
+
+      requestBody.put(
+          "experiment_ids",
+          List.of(experimentId)
+      );
+
+      requestBody.put("max_results", 1000);
+
+      /*
+       * Include active and deleted runs.
+       *
+       * Change this to "ACTIVE_ONLY" if deleted runs should not be returned.
+       */
+      requestBody.put("run_view_type", "ALL");
+
+      /*
+       * MLflow already orders by start_time DESC by default.
+       * Therefore, order_by is not required.
+       *
+       * You can alternatively try:
+       *
+       * requestBody.put(
+       *     "order_by",
+       *     List.of("attributes.start_time DESC")
+       * );
+       */
+
+      /*
+       * Do not send an empty page token on the first request.
+       */
+      if (pageToken != null && !pageToken.isBlank()) {
+        requestBody.put("page_token", pageToken);
+      }
 
       try {
-        ResponseEntity<Map> response =
-            restTemplate.exchange(requestUrl, HttpMethod.POST, entity, Map.class);
+        /*
+         * Explicitly serialize the body, just like the fixed
+         * getExperiments method.
+         */
+        String requestJson =
+            objectMapper.writeValueAsString(requestBody);
 
-        if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
-          return ResponseEntity.status(response.getStatusCode()).build();
+        HttpEntity<String> entity =
+            new HttpEntity<>(requestJson, headers);
+
+        LOG.info(
+            "Calling MLflow runs search: "
+                + "page={}, url={}, experimentId={}, "
+                + "pageToken={}, requestJson={}",
+            pageNumber,
+            requestUrl,
+            experimentId,
+            pageToken,
+            requestJson
+        );
+
+        ResponseEntity<Map> response =
+            restTemplate.exchange(
+                requestUrl,
+                HttpMethod.POST,
+                entity,
+                Map.class
+            );
+
+        if (!response.getStatusCode().is2xxSuccessful()) {
+          LOG.error(
+              "MLflow runs search returned status {}.",
+              response.getStatusCode()
+          );
+
+          return ResponseEntity
+              .status(response.getStatusCode())
+              .build();
+        }
+
+        if (response.getBody() == null) {
+          LOG.warn(
+              "MLflow returned an empty response body for experiment {}.",
+              experimentId
+          );
+
+          break;
         }
 
         Map<String, Object> responseBody = response.getBody();
+
+        /*
+         * This log is useful while debugging mapToRuns.
+         * You can change INFO to DEBUG after the issue is fixed.
+         */
+        LOG.info(
+            "MLflow runs response for page {}: {}",
+            pageNumber,
+            responseBody
+        );
+
+        Object rawRuns = responseBody.get("runs");
+
+        if (!(rawRuns instanceof List<?> rawRunsList)
+            || rawRunsList.isEmpty()) {
+
+          LOG.info(
+              "No runs were returned by MLflow for experiment {} "
+                  + "on page {}.",
+              experimentId,
+              pageNumber
+          );
+
+          break;
+        }
+
         List<Run> pageRuns = mapToRuns(responseBody);
 
-        if (pageRuns != null && !pageRuns.isEmpty()) {
-          allRuns.addAll(pageRuns);
+        /*
+         * Detect a mapper problem separately from an MLflow problem.
+         *
+         * If rawRuns contains values but mapToRuns returns nothing,
+         * the request worked and mapToRuns needs to be fixed.
+         */
+        if (pageRuns == null || pageRuns.isEmpty()) {
+          LOG.error(
+              "MLflow returned {} raw runs, but mapToRuns returned "
+                  + "an empty result. Check the mapToRuns implementation. "
+                  + "Raw response: {}",
+              rawRunsList.size(),
+              responseBody
+          );
+
+          return ResponseEntity
+              .status(HttpStatus.INTERNAL_SERVER_ERROR)
+              .build();
         }
 
-        pageToken = (String) responseBody.get("next_page_token");
-        if (pageToken == null || pageToken.isEmpty()) {
-          break; // No more pages to fetch
+        allRuns.addAll(pageRuns);
+
+        LOG.info(
+            "Processed MLflow runs page {}: "
+                + "pageRuns={}, totalRuns={}",
+            pageNumber,
+            pageRuns.size(),
+            allRuns.size()
+        );
+
+        Object nextPageTokenValue =
+            responseBody.get("next_page_token");
+
+        String nextPageToken =
+            nextPageTokenValue instanceof String
+                ? (String) nextPageTokenValue
+                : null;
+
+        /*
+         * A missing or empty token means there are no more pages.
+         */
+        if (nextPageToken == null || nextPageToken.isBlank()) {
+          LOG.info(
+              "Finished retrieving runs for experiment {}. "
+                  + "No next page token was returned.",
+              experimentId
+          );
+
+          break;
         }
+
+        /*
+         * Prevent:
+         *
+         * token A -> token A
+         */
+        if (nextPageToken.equals(pageToken)) {
+          LOG.error(
+              "Stopping MLflow run pagination because the same "
+                  + "page token was returned twice: {}",
+              nextPageToken
+          );
+
+          break;
+        }
+
+        /*
+         * Prevent:
+         *
+         * token A -> token B -> token A
+         */
+        if (!seenPageTokens.add(nextPageToken)) {
+          LOG.error(
+              "Stopping MLflow run pagination because an already-used "
+                  + "page token was returned: {}",
+              nextPageToken
+          );
+
+          break;
+        }
+
+        pageToken = nextPageToken;
+
+      } catch (HttpClientErrorException e) {
+        LOG.error(
+            "MLflow rejected the runs-search request. "
+                + "experimentId={}, status={}, response={}, request={}",
+            experimentId,
+            e.getStatusCode(),
+            e.getResponseBodyAsString(),
+            requestBody,
+            e
+        );
+
+        return ResponseEntity
+            .status(e.getStatusCode())
+            .build();
+
+      } catch (JsonProcessingException e) {
+        LOG.error(
+            "Could not serialize the MLflow runs-search request: {}",
+            requestBody,
+            e
+        );
+
+        return ResponseEntity
+            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .build();
 
       } catch (Exception e) {
-        LOG.error("Error fetching runs for experiment {}", experimentId, e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        LOG.error(
+            "Error fetching runs for experiment {}.",
+            experimentId,
+            e
+        );
+
+        return ResponseEntity
+            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .build();
       }
     }
+
+    if (pageNumber >= maxPages) {
+      LOG.error(
+          "Stopped MLflow run pagination after reaching the "
+              + "safety limit of {} pages.",
+          maxPages
+      );
+    }
+
+    LOG.info(
+        "Returning {} runs for MLflow experiment {}.",
+        allRuns.size(),
+        experimentId
+    );
 
     return ResponseEntity.ok(allRuns);
   }

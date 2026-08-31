@@ -22,6 +22,7 @@ public class CacheConfig {
         "explanations",
         "featureImportance",
         "experiment-highlights",
-        "llmExplanations");
+        "llmExplanations",
+        "ragExplanations");
   }
 }

@@ -369,16 +369,16 @@ public class ExplainabilityRunHelper {
   }
 
   /**
-   * Builds an {@link ExplanationsRequest} for hyperparameter explainability on runs that have no
-   * ML artifacts (no model file, no X_test/Y_test/... data assets) — e.g. LLM runs, where the
-   * only signal available is the run's params (hyperparameters) and metrics.
+   * Builds an {@link ExplanationsRequest} for hyperparameter explainability on runs that have no ML
+   * artifacts (no model file, no X_test/Y_test/... data assets) — e.g. LLM runs, where the only
+   * signal available is the run's params (hyperparameters) and metrics.
    *
-   * <p>Unlike {@link #requestBuilder}, this never touches {@link MlAnalysisResourceHelper} /
-   * {@link gr.imsi.athenarc.xtremexpvisapi.service.files.FileService}: the surrogate model is
-   * trained purely on (hyperparameters -> metric) pairs collected from the run and its "similar"
-   * runs, so no data download is required. The map key used for {@code putHyperConfigs} is just
-   * the run id — the Python side (hyperparameterExplanation branch of PDP/ALE handlers) only
-   * reads the map values, never the keys.
+   * <p>Unlike {@link #requestBuilder}, this never touches {@link MlAnalysisResourceHelper} / {@link
+   * gr.imsi.athenarc.xtremexpvisapi.service.files.FileService}: the surrogate model is trained
+   * purely on (hyperparameters -> metric) pairs collected from the run and its "similar" runs, so
+   * no data download is required. The map key used for {@code putHyperConfigs} is just the run id —
+   * the Python side (hyperparameterExplanation branch of PDP/ALE handlers) only reads the map
+   * values, never the keys.
    */
   public ExplanationsRequest llmHyperparameterRequestBuilder(
       String explainabilityRequest, String experimentId, String runId, String authorization)
@@ -446,6 +446,181 @@ public class ExplainabilityRunHelper {
     }
 
     LOG.info("LLM hyperparameter explanation - similar runs used: " + similarRuns.size());
+    return requestBuilder.build();
+  }
+
+  private static final java.util.regex.Pattern RAG_CHUNK_MARKER =
+      java.util.regex.Pattern.compile("(?m)^\\[(\\d+)\\] source=(.*)$");
+
+  /** Parsed pieces of a rendered per-example RAG prompt file (see {@link #parseRenderedPrompt}). */
+  private record RenderedPrompt(String instruction, List<String> chunks, List<String> sources) {}
+
+  /**
+   * Parses one of the {@code example_NN_prompt.txt} files logged by the RAG experiment script (the
+   * fully-rendered prompt actually sent to the model) back into its instruction text and the
+   * individual retrieved chunks/sources, using the same {@code "[i] source=<src>\n<content>"} block
+   * format the script's {@code format_context()} produces, joined by blank lines and preceded by
+   * {@code "\n\nContext:\n"} / followed by {@code "\n\nQuestion:"}.
+   */
+  private RenderedPrompt parseRenderedPrompt(String promptContent) {
+    int contextIdx = promptContent.indexOf("\n\nContext:\n");
+    if (contextIdx < 0) {
+      throw new IllegalStateException(
+          "Could not find '\\n\\nContext:\\n' marker in rendered prompt file");
+    }
+    String instruction = promptContent.substring(0, contextIdx);
+    String afterContext = promptContent.substring(contextIdx + "\n\nContext:\n".length());
+
+    int questionIdx = afterContext.indexOf("\n\nQuestion:");
+    String contextBlock = questionIdx >= 0 ? afterContext.substring(0, questionIdx) : afterContext;
+
+    java.util.regex.Matcher matcher = RAG_CHUNK_MARKER.matcher(contextBlock);
+    List<int[]> markerSpans = new ArrayList<>();
+    List<String> sources = new ArrayList<>();
+    while (matcher.find()) {
+      markerSpans.add(new int[] {matcher.start(), matcher.end()});
+      sources.add(matcher.group(2).trim());
+    }
+    if (markerSpans.isEmpty()) {
+      throw new IllegalStateException("No '[i] source=...' chunk markers found in rendered prompt");
+    }
+
+    List<String> chunks = new ArrayList<>();
+    for (int i = 0; i < markerSpans.size(); i++) {
+      int contentStart = markerSpans.get(i)[1];
+      int contentEnd =
+          (i + 1 < markerSpans.size()) ? markerSpans.get(i + 1)[0] : contextBlock.length();
+      chunks.add(contextBlock.substring(contentStart, contentEnd).trim());
+    }
+
+    return new RenderedPrompt(instruction, chunks, sources);
+  }
+
+  /**
+   * Builds an {@link ExplanationsRequest} for RAG chunk-attribution explainability
+   * (explanation_type=llmExplanation, explanation_method=rag_attribution).
+   *
+   * <p>{@code predictions.json} only carries the question/ground_truth/prediction (no chunk text,
+   * no prompt template) - the actual retrieved chunk text only exists in the per-example {@code
+   * example_NN_prompt.txt} data assets (the fully-rendered prompt actually sent to the model), so
+   * those are parsed instead (see {@link #parseRenderedPrompt}). {@code model_name}/{@code
+   * temperature} are run-level params (not per-example), read from {@code run.getParams()}. A
+   * synthetic {@code prompt_template} (with {@code {context}}/{@code {question}} placeholders) is
+   * reconstructed from the parsed instruction so the Python side's existing template-based
+   * rendering is unchanged.
+   */
+  public ExplanationsRequest ragExplanationRequestBuilder(
+      String explainabilityRequest,
+      String experimentId,
+      String runId,
+      int exampleId,
+      String authorization)
+      throws JsonProcessingException, InvalidProtocolBufferException {
+
+    ExplanationsRequest.Builder requestBuilder = ExplanationsRequest.newBuilder();
+    if (explainabilityRequest != null && !explainabilityRequest.isBlank()) {
+      JsonFormat.parser().merge(explainabilityRequest, requestBuilder);
+    }
+    // run_counterfactual is `optional` in the proto specifically so this presence check works -
+    // JsonFormat.merge() throws "field has already been set" if we pre-set it before merging.
+    if (!requestBuilder.hasRunCounterfactual()) {
+      requestBuilder.setRunCounterfactual(true);
+    }
+    if (requestBuilder.getExplanationType().isEmpty()) {
+      requestBuilder.setExplanationType("llmExplanation");
+    }
+    if (requestBuilder.getExplanationMethod().isEmpty()) {
+      requestBuilder.setExplanationMethod("rag_attribution");
+    }
+
+    ExperimentService service = experimentServiceFactory.getActiveService();
+    ResponseEntity<Run> response = service.getRunById(experimentId, runId);
+    Run run = response.getBody();
+    if (run == null) {
+      throw new IllegalArgumentException(
+          "Run not found for experimentId: " + experimentId + ", runId: " + runId);
+    }
+
+    List<gr.imsi.athenarc.xtremexpvisapi.domain.experiment.DataAsset> dataAssets =
+        Optional.ofNullable(run.getDataAssets()).orElse(Collections.emptyList());
+
+    gr.imsi.athenarc.xtremexpvisapi.domain.experiment.DataAsset predictionsAsset =
+        dataAssets.stream()
+            .filter(asset -> "predictions.json".equals(asset.getName()))
+            .findFirst()
+            .orElseThrow(
+                () ->
+                    new IllegalArgumentException(
+                        "No predictions.json data asset found for run: " + runId));
+
+    com.fasterxml.jackson.databind.JsonNode predictions;
+    try {
+      String json =
+          java.nio.file.Files.readString(java.nio.file.Path.of(predictionsAsset.getSource()));
+      predictions = new ObjectMapper().readTree(json);
+    } catch (java.io.IOException e) {
+      throw new IllegalStateException(
+          "Could not read predictions.json at " + predictionsAsset.getSource(), e);
+    }
+
+    if (!predictions.isArray() || exampleId < 0 || exampleId >= predictions.size()) {
+      throw new IllegalArgumentException(
+          "No example at index " + exampleId + " in predictions.json for run: " + runId);
+    }
+    com.fasterxml.jackson.databind.JsonNode row = predictions.get(exampleId);
+
+    List<gr.imsi.athenarc.xtremexpvisapi.domain.experiment.DataAsset> renderedPrompts =
+        dataAssets.stream()
+            .filter(asset -> "prompts".equals(asset.getFolder()))
+            .sorted(
+                Comparator.comparing(
+                    gr.imsi.athenarc.xtremexpvisapi.domain.experiment.DataAsset::getName))
+            .collect(Collectors.toList());
+    if (exampleId < 0 || exampleId >= renderedPrompts.size()) {
+      throw new IllegalArgumentException(
+          "No rendered prompt file found for example index "
+              + exampleId
+              + " in run: "
+              + runId
+              + " (found "
+              + renderedPrompts.size()
+              + " under the 'prompts' folder)");
+    }
+    gr.imsi.athenarc.xtremexpvisapi.domain.experiment.DataAsset promptAsset =
+        renderedPrompts.get(exampleId);
+
+    String promptContent;
+    try {
+      promptContent =
+          java.nio.file.Files.readString(java.nio.file.Path.of(promptAsset.getSource()));
+    } catch (java.io.IOException e) {
+      throw new IllegalStateException(
+          "Could not read rendered prompt file at " + promptAsset.getSource(), e);
+    }
+    RenderedPrompt renderedPrompt = parseRenderedPrompt(promptContent);
+
+    String modelName =
+        Optional.ofNullable(run.getParams()).orElse(Collections.emptyList()).stream()
+            .filter(param -> "model_name".equals(param.getName()))
+            .map(Param::getValue)
+            .findFirst()
+            .orElse("");
+    double temperature =
+        Optional.ofNullable(run.getParams()).orElse(Collections.emptyList()).stream()
+            .filter(param -> "temperature".equals(param.getName()))
+            .map(Param::getValue)
+            .findFirst()
+            .map(Double::parseDouble)
+            .orElse(0.0);
+
+    requestBuilder.setRagQuestion(row.path("question").asText(""));
+    requestBuilder.addAllRagRetrievedChunks(renderedPrompt.chunks());
+    requestBuilder.addAllRagRetrievedSources(renderedPrompt.sources());
+    requestBuilder.setRagPromptTemplate(
+        renderedPrompt.instruction() + "\n\nContext:\n{context}\n\nQuestion: {question}");
+    requestBuilder.setRagModelName(modelName);
+    requestBuilder.setRagTemperature(temperature);
+
     return requestBuilder.build();
   }
 

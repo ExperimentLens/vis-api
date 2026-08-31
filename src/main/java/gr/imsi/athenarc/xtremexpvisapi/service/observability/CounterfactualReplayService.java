@@ -10,10 +10,10 @@ import java.util.NoSuchElementException;
 import org.springframework.stereotype.Service;
 
 /**
- * Replays a single GENERATION observation from a trace with an edited input, so a user can see
- * what the agent would have proposed/decided had the prompt been different. This is a reasoning
- * counterfactual only: it re-runs the LLM call, not the underlying training/evaluation code, so
- * any metrics quoted in the counterfactual output are the model's own claims, not re-measured.
+ * Replays a single GENERATION observation from a trace with an edited input, so a user can see what
+ * the agent would have proposed/decided had the prompt been different. This is a reasoning
+ * counterfactual only: it re-runs the LLM call, not the underlying training/evaluation code, so any
+ * metrics quoted in the counterfactual output are the model's own claims, not re-measured.
  */
 @Service
 public class CounterfactualReplayService {
@@ -56,8 +56,7 @@ public class CounterfactualReplayService {
 
     String newOutput = ollamaClient.generate(prompt, target.getModel());
 
-    double diffRatio =
-        DiffUtils.tokenDiffRatio(String.valueOf(target.getOutput()), newOutput);
+    double diffRatio = DiffUtils.tokenDiffRatio(String.valueOf(target.getOutput()), newOutput);
 
     ReplayResult result = new ReplayResult();
     result.setTraceId(traceId);

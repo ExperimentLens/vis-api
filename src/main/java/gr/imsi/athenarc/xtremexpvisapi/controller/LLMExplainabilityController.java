@@ -17,10 +17,10 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Explainability entry point for LLM runs.
  *
- * <p>LLM runs don't carry the ML artifacts (model.pkl/model.pt, X_test/Y_test/... CSVs) that
- * {@link ExplainabilityController} relies on for feature-level explanations. What they do have is
- * run params (hyperparameters, e.g. temperature, top_p, max_tokens) and metrics, which is enough
- * to train a surrogate model mapping hyperparameters -> metric and explain it with PDP/ALE. This
+ * <p>LLM runs don't carry the ML artifacts (model.pkl/model.pt, X_test/Y_test/... CSVs) that {@link
+ * ExplainabilityController} relies on for feature-level explanations. What they do have is run
+ * params (hyperparameters, e.g. temperature, top_p, max_tokens) and metrics, which is enough to
+ * train a surrogate model mapping hyperparameters -> metric and explain it with PDP/ALE. This
  * controller is the starting point for LLM explainability; further explanation types (e.g.
  * prompt-level explanations) can be added here as they're built out in the explainability-module.
  */

@@ -3,7 +3,9 @@ package gr.imsi.athenarc.xtremexpvisapi.service.observability;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Merges user-supplied overrides into an observation's original input for a counterfactual replay. */
+/**
+ * Merges user-supplied overrides into an observation's original input for a counterfactual replay.
+ */
 public final class InputMerger {
 
   private InputMerger() {}

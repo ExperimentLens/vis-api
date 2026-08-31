@@ -77,14 +77,17 @@ public class ObservabilityController {
               + "compared. This replays reasoning only; it does not re-execute training/evaluation.")
   @ApiResponses(
       value = {
-        @ApiResponse(responseCode = "200", description = "Successfully ran the counterfactual replay"),
-        @ApiResponse(responseCode = "400", description = "Invalid request or non-replayable observation"),
+        @ApiResponse(
+            responseCode = "200",
+            description = "Successfully ran the counterfactual replay"),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Invalid request or non-replayable observation"),
         @ApiResponse(responseCode = "404", description = "Trace or observation not found"),
         @ApiResponse(responseCode = "500", description = "Internal server error")
       })
   public ResponseEntity<ReplayResult> runCounterfactual(
-      @Parameter(description = "The ID of the trace", required = true) @PathVariable
-          String traceId,
+      @Parameter(description = "The ID of the trace", required = true) @PathVariable String traceId,
       @RequestBody ReplayRequest request) {
     ReplayResult result = counterfactualReplayService.runCounterfactual(traceId, request);
     return ResponseEntity.ok(result);

@@ -2,6 +2,9 @@ package gr.imsi.athenarc.xtremexpvisapi.controller;
 
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ReplayRequest;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ReplayResult;
+import gr.imsi.athenarc.xtremexpvisapi.domain.observability.Score;
+import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ScoreCreateRequest;
+import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ScoresResponse;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.TraceDetail;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.TracesResponse;
 import gr.imsi.athenarc.xtremexpvisapi.service.observability.CounterfactualReplayService;
@@ -91,5 +94,44 @@ public class ObservabilityController {
       @RequestBody ReplayRequest request) {
     ReplayResult result = counterfactualReplayService.runCounterfactual(traceId, request);
     return ResponseEntity.ok(result);
+  }
+
+  @PostMapping("/scores")
+  @Operation(
+      summary = "Create a human annotation",
+      description =
+          "Attaches a score (thumbs/rating + comment) to a trace, or to one observation within it "
+              + "when observationId is set.")
+  @ApiResponses(
+      value = {
+        @ApiResponse(responseCode = "200", description = "Successfully created the annotation"),
+        @ApiResponse(responseCode = "400", description = "Invalid input"),
+        @ApiResponse(responseCode = "500", description = "Internal server error")
+      })
+  public ResponseEntity<Score> createScore(@RequestBody ScoreCreateRequest request) {
+    Score score = observabilityService.createScore(request);
+    return ResponseEntity.ok(score);
+  }
+
+  @GetMapping("/scores")
+  @Operation(
+      summary = "List annotations",
+      description =
+          "Lists scores for a project, optionally narrowed to one trace and/or score name — "
+              + "the source for an 'all annotations across the experiment' view.")
+  @ApiResponses(
+      value = {
+        @ApiResponse(responseCode = "200", description = "Successfully retrieved annotations"),
+        @ApiResponse(responseCode = "400", description = "Invalid input"),
+        @ApiResponse(responseCode = "500", description = "Internal server error")
+      })
+  public ResponseEntity<ScoresResponse> getScores(
+      @Parameter(description = "The project ID", required = true) @RequestParam String projectId,
+      @Parameter(description = "The trace ID") @RequestParam(required = false) String traceId,
+      @Parameter(description = "The score name") @RequestParam(required = false) String name,
+      @Parameter(description = "Page number (1-indexed)") @RequestParam(required = false) Integer page,
+      @Parameter(description = "Page size") @RequestParam(required = false) Integer limit) {
+    ScoresResponse scores = observabilityService.getScores(projectId, traceId, name, page, limit);
+    return ResponseEntity.ok(scores);
   }
 }

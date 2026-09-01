@@ -6,7 +6,12 @@ public class Score {
   private String id;
   private String traceId;
   private String name;
-  private double value;
+  // Nullable: a CATEGORICAL score carries its value in stringValue instead,
+  // and Langfuse returns value=null for those — a primitive double can't
+  // hold that.
+  private Double value;
+  private String stringValue;
+  private String dataType;
   private String observationId;
   private Date timestamp;
   private String comment;
@@ -36,12 +41,28 @@ public class Score {
     this.name = name;
   }
 
-  public double getValue() {
+  public Double getValue() {
     return value;
   }
 
-  public void setValue(double value) {
+  public void setValue(Double value) {
     this.value = value;
+  }
+
+  public String getStringValue() {
+    return stringValue;
+  }
+
+  public void setStringValue(String stringValue) {
+    this.stringValue = stringValue;
+  }
+
+  public String getDataType() {
+    return dataType;
+  }
+
+  public void setDataType(String dataType) {
+    this.dataType = dataType;
   }
 
   public String getObservationId() {

@@ -1,5 +1,7 @@
 package gr.imsi.athenarc.xtremexpvisapi.controller;
 
+import gr.imsi.athenarc.xtremexpvisapi.domain.observability.IssueScanRequest;
+import gr.imsi.athenarc.xtremexpvisapi.domain.observability.IssueScanResponse;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ReplayRequest;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ReplayResult;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.Score;
@@ -8,6 +10,7 @@ import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ScoresResponse;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.TraceDetail;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.TracesResponse;
 import gr.imsi.athenarc.xtremexpvisapi.service.observability.CounterfactualReplayService;
+import gr.imsi.athenarc.xtremexpvisapi.service.observability.IssueDetectionService;
 import gr.imsi.athenarc.xtremexpvisapi.service.observability.ObservabilityService;
 import gr.imsi.athenarc.xtremexpvisapi.service.observability.ObservabilityServiceFactory;
 import io.swagger.v3.oas.annotations.Operation;
@@ -29,12 +32,15 @@ public class ObservabilityController {
 
   private final ObservabilityService observabilityService;
   private final CounterfactualReplayService counterfactualReplayService;
+  private final IssueDetectionService issueDetectionService;
 
   public ObservabilityController(
       ObservabilityServiceFactory observabilityServiceFactory,
-      CounterfactualReplayService counterfactualReplayService) {
+      CounterfactualReplayService counterfactualReplayService,
+      IssueDetectionService issueDetectionService) {
     this.observabilityService = observabilityServiceFactory.getObservabilityService();
     this.counterfactualReplayService = counterfactualReplayService;
+    this.issueDetectionService = issueDetectionService;
   }
 
   @GetMapping("/traces")
@@ -133,5 +139,24 @@ public class ObservabilityController {
       @Parameter(description = "Page size") @RequestParam(required = false) Integer limit) {
     ScoresResponse scores = observabilityService.getScores(projectId, traceId, name, page, limit);
     return ResponseEntity.ok(scores);
+  }
+
+  @PostMapping("/detect-issues")
+  @Operation(
+      summary = "Scan a batch of traces for issues using a local Ollama model",
+      description =
+          "Runs a local Ollama model as a judge over each supplied trace's question/answer, "
+              + "against MLflow's CLEARS framework (Correctness, Latency, Execution, Adherence, "
+              + "Relevance, Safety). Only traces the model flags are returned; a failure on one "
+              + "trace (bad JSON, timeout, unreachable Ollama) doesn't abort the rest of the scan.")
+  @ApiResponses(
+      value = {
+        @ApiResponse(responseCode = "200", description = "Successfully ran the scan"),
+        @ApiResponse(responseCode = "400", description = "Invalid input"),
+        @ApiResponse(responseCode = "500", description = "Internal server error")
+      })
+  public ResponseEntity<IssueScanResponse> detectIssues(@RequestBody IssueScanRequest request) {
+    IssueScanResponse response = issueDetectionService.scan(request);
+    return ResponseEntity.ok(response);
   }
 }

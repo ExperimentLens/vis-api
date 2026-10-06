@@ -1,0 +1,12 @@
+# Keep build context small and secrets/artifacts OUT of the image layers.
+# Build only needs: pom.xml, src/, .mvn/, mvnw, lib/  (target/ is produced by mvn).
+.git/
+.gitignore
+.env
+target/
+logs.log
+data/
+HELP.md
+.idea/
+.vscode/
+*.iml

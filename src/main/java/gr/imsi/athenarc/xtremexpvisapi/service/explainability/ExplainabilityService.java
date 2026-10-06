@@ -109,6 +109,68 @@ public class ExplainabilityService {
     return objectMapper.readTree(jsonString);
   }
 
+  @Cacheable(
+      value = "llmExplanations",
+      key =
+          "T(gr.imsi.athenarc.xtremexpvisapi.service.explainability.ExplainabilityService).explainKey(#explainabilityRequest,#experimentId,#runId,#authorization)")
+  public JsonNode GetLLMHyperparameterExplains(
+      String explainabilityRequest, String experimentId, String runId, String authorization)
+      throws InvalidProtocolBufferException, JsonProcessingException {
+
+    ExplanationsRequest request =
+        explainabilityRunHelper.llmHyperparameterRequestBuilder(
+            explainabilityRequest, experimentId, runId, authorization);
+
+    ExplanationsResponse response = stub.getExplanation(request);
+
+    String jsonString = JsonFormat.printer().print(response);
+    ObjectMapper objectMapper = new ObjectMapper();
+    return objectMapper.readTree(jsonString);
+  }
+
+  // Helper used by SpEL in @Cacheable key expression
+  public static String ragExplainKey(
+      String explainabilityRequest,
+      String experimentId,
+      String runId,
+      int exampleId,
+      String authorization) {
+    String raw =
+        (explainabilityRequest == null ? "" : explainabilityRequest)
+            + "|"
+            + (experimentId == null ? "" : experimentId)
+            + "|"
+            + (runId == null ? "" : runId)
+            + "|"
+            + exampleId
+            + "|"
+            + (authorization == null ? "" : authorization);
+    return "GetRagExplains:" + sha256Hex(raw);
+  }
+
+  @Cacheable(
+      value = "ragExplanations",
+      key =
+          "T(gr.imsi.athenarc.xtremexpvisapi.service.explainability.ExplainabilityService).ragExplainKey(#explainabilityRequest,#experimentId,#runId,#exampleId,#authorization)")
+  public JsonNode GetRagExplains(
+      String explainabilityRequest,
+      String experimentId,
+      String runId,
+      int exampleId,
+      String authorization)
+      throws InvalidProtocolBufferException, JsonProcessingException {
+
+    ExplanationsRequest request =
+        explainabilityRunHelper.ragExplanationRequestBuilder(
+            explainabilityRequest, experimentId, runId, exampleId, authorization);
+
+    ExplanationsResponse response = stub.getExplanation(request);
+
+    String jsonString = JsonFormat.printer().print(response);
+    ObjectMapper objectMapper = new ObjectMapper();
+    return objectMapper.readTree(jsonString);
+  }
+
   public JsonNode ApplyAffectedActions()
       throws InvalidProtocolBufferException, JsonProcessingException {
     ApplyAffectedActionsRequest request = ApplyAffectedActionsRequest.newBuilder().build();

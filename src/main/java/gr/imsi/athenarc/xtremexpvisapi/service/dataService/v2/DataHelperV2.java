@@ -1,5 +1,6 @@
 package gr.imsi.athenarc.xtremexpvisapi.service.dataService.v2;
 
+import gr.imsi.athenarc.xtremexpvisapi.domain.queryv2.SqlQuoting;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -81,12 +82,7 @@ public class DataHelperV2 {
    * @return the corrected string
    */
   protected String getCorrectedString(String input) {
-    // Implement your correction logic here
-    if (input.matches("[a-zA-Z_][a-zA-Z0-9_]*")) {
-      return input; // safe to use as-is
-    } else {
-      return "\"" + input.replace("\"", "\"\"") + "\""; // quote and escape
-    }
+    return SqlQuoting.identifier(input);
   }
 
   /**
@@ -137,7 +133,8 @@ public class DataHelperV2 {
 
     // Check if time data is ordered (indicating time series)
     String timeColumn = timeColumns.get(0);
-    String orderCheckSql = baseSql.replace("LIMIT 10", "ORDER BY " + timeColumn + " LIMIT 10");
+    String orderCheckSql =
+        baseSql.replace("LIMIT 10", "ORDER BY " + getCorrectedString(timeColumn) + " LIMIT 10");
 
     try {
       ResultSet orderedResult = statement.executeQuery(orderCheckSql);
@@ -302,18 +299,7 @@ public class DataHelperV2 {
               throw new RuntimeException("Failed to preprocess JSON file: " + datasetPath, e);
             }
           }
-          sql.append(" FROM ");
-          switch (fileType) {
-            case CSV:
-              sql.append("read_csv('").append(datasetPath).append("')");
-              break;
-            case PARQUET:
-              sql.append("read_parquet('").append(datasetPath).append("')");
-              break;
-            case JSON:
-              sql.append("read_json_auto('").append(datasetPath).append("')");
-              break;
-          }
+          sql.append(" FROM ").append(getFileTypeSQL(fileType, datasetPath));
 
           // WHERE clause (filters)
           if (request.getFilters() != null && !request.getFilters().isEmpty()) {
@@ -474,11 +460,11 @@ public class DataHelperV2 {
   protected String getFileTypeSQL(FileType fileType, String filePath) {
     switch (fileType) {
       case CSV:
-        return "read_csv('" + filePath + "')";
+        return "read_csv(" + SqlQuoting.literal(filePath) + ")";
       case PARQUET:
-        return "read_parquet('" + filePath + "')";
+        return "read_parquet(" + SqlQuoting.literal(filePath) + ")";
       case JSON:
-        return "read_json_auto('" + filePath + "')";
+        return "read_json_auto(" + SqlQuoting.literal(filePath) + ")";
       default:
         throw new IllegalArgumentException("Unknown file type: " + fileType);
     }

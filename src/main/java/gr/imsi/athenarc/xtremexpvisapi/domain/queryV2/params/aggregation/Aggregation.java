@@ -1,5 +1,6 @@
 package gr.imsi.athenarc.xtremexpvisapi.domain.queryv2.params.aggregation;
 
+import gr.imsi.athenarc.xtremexpvisapi.domain.queryv2.SqlQuoting;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -22,8 +23,7 @@ public class Aggregation {
 
   private String prepareColumn(String col) {
     if (col == null) return "col";
-    // Add quotes if name has non-alphanumeric or underscores
-    return col.matches("[a-zA-Z_][a-zA-Z0-9_]*") ? col : "\"" + col.replace("\"", "\"\"") + "\"";
+    return SqlQuoting.identifier(col);
   }
 
   private String sanitizeAlias(String col) {
@@ -91,14 +91,4 @@ public class Aggregation {
     return sql.toString();
   }
 
-  private String aliasHelper(String column) {
-    // Handle special characters in column names for aliases
-    if (column == null) return "col";
-    return column.toLowerCase().replace(" ", "_").replace("*", "all");
-  }
-
-  // Helper method for column preparation
-  protected String columnPreparation(Object column) {
-    return column.toString().contains(" ") ? "\"" + column + "\"" : column.toString();
-  }
 }

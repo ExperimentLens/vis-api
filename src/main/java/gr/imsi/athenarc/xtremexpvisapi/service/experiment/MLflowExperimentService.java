@@ -409,6 +409,7 @@ public class MLflowExperimentService implements ExperimentService {
 
     return experiments.stream().map(this::mapToExperiment).collect(Collectors.toList());
   }
+  
 
   private Experiment mapToExperiment(Map<String, Object> data) {
     Experiment experiment = new Experiment();
@@ -431,6 +432,21 @@ public class MLflowExperimentService implements ExperimentService {
     if (data.get("tags") instanceof List) {
       List<Map<String, Object>> mlflowTags = (List<Map<String, Object>>) data.get("tags");
       mlflowTags.forEach(tag -> tags.put((String) tag.get("key"), (String) tag.get("value")));
+    }
+
+    // MLflow only bumps last_update_time on rename/delete/restore, not on new runs, so the
+    // SDK stamps each run's start time in this tag; show whichever is newer.
+    String lastRunAt = tags.get("experimentlens.last_run_at");
+    if (lastRunAt != null) {
+      try {
+        long lastRun = Long.parseLong(lastRunAt.trim());
+        Long current = experiment.getLastUpdateTime();
+        if (current == null || lastRun > current) {
+          experiment.setLastUpdateTime(lastRun);
+        }
+      } catch (NumberFormatException ignored) {
+        // Not a timestamp: keep MLflow's own value.
+      }
     }
     experiment.setTags(tags);
 

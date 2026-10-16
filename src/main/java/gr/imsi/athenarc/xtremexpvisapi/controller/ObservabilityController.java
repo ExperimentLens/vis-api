@@ -52,7 +52,7 @@ public class ObservabilityController {
         @ApiResponse(responseCode = "500", description = "Internal server error")
       })
   public ResponseEntity<TracesResponse> getTraces(
-      @Parameter(description = "The project ID", required = true) @RequestParam String projectId,
+      @Parameter(description = "Langfuse project ID; optional, Langfuse resolves it from the API keys") @RequestParam(required = false) String projectId,
       @Parameter(description = "The session ID") @RequestParam(required = false) String sessionId,
       @Parameter(description = "The user ID") @RequestParam(required = false) String userId) {
     TracesResponse traces = observabilityService.getTraces(projectId, sessionId, userId);
@@ -132,7 +132,7 @@ public class ObservabilityController {
         @ApiResponse(responseCode = "500", description = "Internal server error")
       })
   public ResponseEntity<ScoresResponse> getScores(
-      @Parameter(description = "The project ID", required = true) @RequestParam String projectId,
+      @Parameter(description = "Langfuse project ID; optional, Langfuse resolves it from the API keys") @RequestParam(required = false) String projectId,
       @Parameter(description = "The trace ID") @RequestParam(required = false) String traceId,
       @Parameter(description = "The score name") @RequestParam(required = false) String name,
       @Parameter(description = "Page number (1-indexed)") @RequestParam(required = false) Integer page,

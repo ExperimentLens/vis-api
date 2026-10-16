@@ -41,8 +41,11 @@ public class LangfuseObservabilityService implements ObservabilityService {
     UriComponentsBuilder uriBuilder =
         UriComponentsBuilder.fromHttpUrl(apiUrl)
             .path("/api/public/traces")
-            .queryParam("projectId", projectId)
             .queryParam("fields", "observations,scores");
+
+    if (projectId != null && !projectId.isEmpty()) {
+      uriBuilder.queryParam("projectId", projectId);
+    }
 
     if (sessionId != null && !sessionId.isEmpty()) {
       uriBuilder.queryParam("sessionId", sessionId);
@@ -115,7 +118,11 @@ public class LangfuseObservabilityService implements ObservabilityService {
     HttpEntity<String> entity = new HttpEntity<>(headers);
 
     UriComponentsBuilder uriBuilder =
-        UriComponentsBuilder.fromHttpUrl(apiUrl).path("/api/public/scores").queryParam("projectId", projectId);
+        UriComponentsBuilder.fromHttpUrl(apiUrl).path("/api/public/scores");
+
+    if (projectId != null && !projectId.isEmpty()) {
+      uriBuilder.queryParam("projectId", projectId);
+    }
 
     if (traceId != null && !traceId.isEmpty()) {
       uriBuilder.queryParam("traceId", traceId);

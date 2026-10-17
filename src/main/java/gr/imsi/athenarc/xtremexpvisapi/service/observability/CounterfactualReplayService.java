@@ -19,12 +19,12 @@ import org.springframework.stereotype.Service;
 public class CounterfactualReplayService {
 
   private final ObservabilityServiceFactory observabilityServiceFactory;
-  private final OllamaClient ollamaClient;
+  private final LlmClient llmClient;
 
   public CounterfactualReplayService(
-      ObservabilityServiceFactory observabilityServiceFactory, OllamaClient ollamaClient) {
+      ObservabilityServiceFactory observabilityServiceFactory, LlmClient llmClient) {
     this.observabilityServiceFactory = observabilityServiceFactory;
-    this.ollamaClient = ollamaClient;
+    this.llmClient = llmClient;
   }
 
   public ReplayResult runCounterfactual(String traceId, ReplayRequest request) {
@@ -54,7 +54,7 @@ public class CounterfactualReplayService {
     Object newInput = InputMerger.merge(target.getInput(), request.getOverrides());
     String prompt = extractPrompt(newInput);
 
-    String newOutput = ollamaClient.generate(prompt, target.getModel());
+    String newOutput = llmClient.generate(prompt, target.getModel());
 
     double diffRatio = DiffUtils.tokenDiffRatio(String.valueOf(target.getOutput()), newOutput);
 

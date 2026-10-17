@@ -13,10 +13,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
- * Scans a batch of traces for quality/operational issues using a local Ollama model as a judge —
+ * Scans a batch of traces for quality/operational issues using an LLM judge (see LlmClient) —
  * a lightweight, local-model analogue of MLflow's "Detect Issues" feature. Judges against
  * MLflow's CLEARS framework (Correctness, Latency, Execution, Adherence, Relevance, Safety), one
- * trace at a time; a failure on one trace (bad JSON, timeout, unreachable Ollama) doesn't abort
+ * trace at a time; a failure on one trace (bad JSON, timeout, unreachable model) doesn't abort
  * the rest of the batch.
  */
 @Service
@@ -27,11 +27,11 @@ public class IssueDetectionService {
   private static final List<String> DEFAULT_CATEGORIES =
       List.of("Correctness", "Latency", "Execution", "Adherence", "Relevance", "Safety");
 
-  private final OllamaClient ollamaClient;
+  private final LlmClient llmClient;
   private final ObjectMapper objectMapper = new ObjectMapper();
 
-  public IssueDetectionService(OllamaClient ollamaClient) {
-    this.ollamaClient = ollamaClient;
+  public IssueDetectionService(LlmClient llmClient) {
+    this.llmClient = llmClient;
   }
 
   public IssueScanResponse scan(IssueScanRequest request) {
@@ -69,7 +69,7 @@ public class IssueDetectionService {
     String systemPrompt = buildSystemPrompt(categories);
     String userPrompt = buildUserPrompt(trace);
 
-    String rawJson = ollamaClient.chatJson(systemPrompt, userPrompt, model);
+    String rawJson = llmClient.chatJson(systemPrompt, userPrompt, model);
     JsonNode node = objectMapper.readTree(rawJson);
 
     boolean hasIssue = node.path("hasIssue").asBoolean(false);

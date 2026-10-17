@@ -143,12 +143,12 @@ public class ObservabilityController {
 
   @PostMapping("/detect-issues")
   @Operation(
-      summary = "Scan a batch of traces for issues using a local Ollama model",
+      summary = "Scan a batch of traces for issues using an LLM judge",
       description =
-          "Runs a local Ollama model as a judge over each supplied trace's question/answer, "
+          "Runs an LLM judge (Ollama, Anthropic or OpenAI-compatible, picked by the model prefix) over each supplied trace's question/answer, "
               + "against MLflow's CLEARS framework (Correctness, Latency, Execution, Adherence, "
               + "Relevance, Safety). Only traces the model flags are returned; a failure on one "
-              + "trace (bad JSON, timeout, unreachable Ollama) doesn't abort the rest of the scan.")
+              + "trace (bad JSON, timeout, unreachable model) doesn't abort the rest of the scan.")
   @ApiResponses(
       value = {
         @ApiResponse(responseCode = "200", description = "Successfully ran the scan"),

@@ -16,6 +16,8 @@ public class Observation {
   private String statusMessage;
   private String parentObservationId;
   private int version;
+  // Object, not Map: Langfuse may return a string or null here for older observations.
+  private Object metadata;
 
   // Getters and Setters
   public String getId() {
@@ -120,5 +122,13 @@ public class Observation {
 
   public void setVersion(int version) {
     this.version = version;
+  }
+
+  public Object getMetadata() {
+    return metadata;
+  }
+
+  public void setMetadata(Object metadata) {
+    this.metadata = metadata;
   }
 }

@@ -5,11 +5,15 @@ import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ScoreCreateRequest;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.ScoresResponse;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.TraceDetail;
 import gr.imsi.athenarc.xtremexpvisapi.domain.observability.TracesResponse;
+import java.util.List;
 
 public interface ObservabilityService {
   TracesResponse getTraces(String projectId, String sessionId, String userId);
 
   TraceDetail getTrace(String traceId);
+
+  /** Every trace of a user (an experiment), each with its observations and scores. */
+  List<TraceDetail> getTraceDetails(String projectId, String userId);
 
   /** Creates a human annotation (score) on a trace, or on one observation within it. */
   Score createScore(ScoreCreateRequest request);

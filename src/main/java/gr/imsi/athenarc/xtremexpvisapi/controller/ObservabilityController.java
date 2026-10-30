@@ -14,6 +14,7 @@ import gr.imsi.athenarc.xtremexpvisapi.service.observability.IssueDetectionServi
 import gr.imsi.athenarc.xtremexpvisapi.service.observability.ObservabilityService;
 import gr.imsi.athenarc.xtremexpvisapi.service.observability.ObservabilityServiceFactory;
 import io.swagger.v3.oas.annotations.Operation;
+import java.util.List;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -57,6 +58,22 @@ public class ObservabilityController {
       @Parameter(description = "The user ID") @RequestParam(required = false) String userId) {
     TracesResponse traces = observabilityService.getTraces(projectId, sessionId, userId);
     return ResponseEntity.ok(traces);
+  }
+
+  @GetMapping("/traces/details")
+  @Operation(
+      summary = "Get every trace of a user with full details",
+      description =
+          "Get all traces of a user (an experiment), each with its observations and scores, in one call.")
+  @ApiResponses(
+      value = {
+        @ApiResponse(responseCode = "200", description = "Successfully retrieved the traces"),
+        @ApiResponse(responseCode = "500", description = "Internal server error")
+      })
+  public ResponseEntity<List<TraceDetail>> getTraceDetails(
+      @Parameter(description = "Langfuse project ID; optional, Langfuse resolves it from the API keys") @RequestParam(required = false) String projectId,
+      @Parameter(description = "The user ID (experiment ID)", required = true) @RequestParam String userId) {
+    return ResponseEntity.ok(observabilityService.getTraceDetails(projectId, userId));
   }
 
   @GetMapping("/traces/{traceId}")

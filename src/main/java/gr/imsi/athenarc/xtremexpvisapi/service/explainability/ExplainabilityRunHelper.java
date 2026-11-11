@@ -11,6 +11,7 @@ import explainabilityService.FeatureImportanceRequest;
 import explainabilityService.HyperparameterList;
 import explainabilityService.Hyperparameters;
 import gr.imsi.athenarc.xtremexpvisapi.controller.DataController;
+import gr.imsi.athenarc.xtremexpvisapi.domain.experiment.Experiment;
 import gr.imsi.athenarc.xtremexpvisapi.domain.experiment.Param;
 import gr.imsi.athenarc.xtremexpvisapi.domain.experiment.Run;
 import gr.imsi.athenarc.xtremexpvisapi.service.experiment.ExperimentService;
@@ -418,6 +419,12 @@ public class ExplainabilityRunHelper {
               .orElseThrow(() -> new IllegalArgumentException("No differing parameters found")));
     }
 
+    Set<String> identifierParams = identifierParams(experimentId, similarRuns);
+    identifierParams.remove(requestBuilder.getFeature1());
+    if (!identifierParams.isEmpty()) {
+      LOG.info("LLM hyperparameter explanation - ignoring identifier params: " + identifierParams);
+    }
+
     for (Run similarRun : similarRuns) {
       List<Param> params = similarRun.getParams();
       if (params == null || params.isEmpty()) {
@@ -430,6 +437,9 @@ public class ExplainabilityRunHelper {
       hyperparametersBuilder.setMetricValue((float) metricValue);
 
       for (Param param : params) {
+        if (identifierParams.contains(param.getName())) {
+          continue;
+        }
         HyperparameterList.Builder hyperparameterListBuilder = HyperparameterList.newBuilder();
         hyperparameterListBuilder.setValues(param.getValue());
         try {
@@ -447,6 +457,61 @@ public class ExplainabilityRunHelper {
 
     LOG.info("LLM hyperparameter explanation - similar runs used: " + similarRuns.size());
     return requestBuilder.build();
+  }
+
+  /**
+   * Params that label a run rather than configure it: the group and case params the SDK declares
+   * as experiment tags ({@code experimentlens.group_param} / {@code experimentlens.case_param}),
+   * and any text param whose value differs on every run (e.g. a variant name). Left in, the
+   * surrogate model fits on these labels and they soak up the effect of the real settings.
+   */
+  private Set<String> identifierParams(String experimentId, List<Run> runs) {
+    Set<String> identifiers = new HashSet<>();
+    try {
+      Experiment experiment =
+          experimentServiceFactory.getActiveService().getExperimentById(experimentId).getBody();
+      if (experiment != null && experiment.getTags() != null) {
+        for (String tag : List.of("experimentlens.group_param", "experimentlens.case_param")) {
+          String name = experiment.getTags().get(tag);
+          if (name != null && !name.isBlank()) {
+            identifiers.add(name);
+          }
+        }
+      }
+    } catch (RuntimeException e) {
+      LOG.warn("Could not read tags of experiment " + experimentId + ": " + e.getMessage());
+    }
+
+    if (runs.size() > 2) {
+      Map<String, Set<String>> valuesByParam = new HashMap<>();
+      for (Run run : runs) {
+        for (Param param : Optional.ofNullable(run.getParams()).orElse(List.of())) {
+          valuesByParam
+              .computeIfAbsent(param.getName(), k -> new HashSet<>())
+              .add(param.getValue());
+        }
+      }
+      valuesByParam.forEach(
+          (name, values) -> {
+            boolean allText = values.stream().noneMatch(ExplainabilityRunHelper::isNumeric);
+            if (allText && values.size() == runs.size()) {
+              identifiers.add(name);
+            }
+          });
+    }
+    return identifiers;
+  }
+
+  private static boolean isNumeric(String value) {
+    if (value == null) {
+      return false;
+    }
+    try {
+      Double.parseDouble(value);
+      return true;
+    } catch (NumberFormatException e) {
+      return false;
+    }
   }
 
   private static final java.util.regex.Pattern RAG_CHUNK_MARKER =

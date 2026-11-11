@@ -17,6 +17,8 @@ import explainabilityService.FeatureImportanceRequest;
 import explainabilityService.FeatureImportanceResponse;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -121,7 +123,16 @@ public class ExplainabilityService {
         explainabilityRunHelper.llmHyperparameterRequestBuilder(
             explainabilityRequest, experimentId, runId, authorization);
 
-    ExplanationsResponse response = stub.getExplanation(request);
+    ExplanationsResponse response;
+    try {
+      response = stub.getExplanation(request);
+    } catch (StatusRuntimeException e) {
+      // About 1 in 15 first calls fail with INTERNAL "end-of-stream mid-frame"; a second try works.
+      if (e.getStatus().getCode() != Status.Code.INTERNAL) {
+        throw e;
+      }
+      response = stub.getExplanation(request);
+    }
 
     String jsonString = JsonFormat.printer().print(response);
     ObjectMapper objectMapper = new ObjectMapper();
